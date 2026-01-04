@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQL Gateway Client</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Vue.js 3 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <!-- Axios -->
+    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .font-mono { font-family: 'JetBrains Mono', monospace; }
+        /* Custom scrollbar for tables */
+        .custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 h-screen flex flex-col overflow-hidden">
+
+    <div id="app" class="h-full flex flex-col">
+        <!-- Header -->
+        <header class="bg-white border-b border-slate-200 px-6 py-3 flex items-center justify-between shadow-sm z-10">
+            <div class="flex items-center gap-3">
+                <div class="bg-indigo-600 p-1.5 rounded text-white">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+                    </svg>
+                </div>
+                <h1 class="font-bold text-lg tracking-tight text-slate-800">SQL Gateway Client</h1>
+            </div>
+            
+            <div class="flex items-center gap-4">
+                <div class="flex items-center gap-2 text-sm text-slate-600 bg-slate-100 px-3 py-1.5 rounded-full border border-slate-200">
+                    <span class="w-2 h-2 rounded-full" :class="connectionStatus === 'connected' ? 'bg-green-500' : 'bg-red-500'"></span>
+                    {{ connectionStatus === 'connected' ? 'Connected' : 'Disconnected' }}
+                </div>
+                <button @click="showSettings = true" class="p-2 hover:bg-slate-100 rounded-full text-slate-500 transition-colors">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="flex-1 flex overflow-hidden">
+            <!-- Left Sidebar (Query Editor) -->
+            <div class="w-1/3 min-w-[400px] flex flex-col border-r border-slate-200 bg-white">
+                <div class="p-4 border-b border-slate-100 space-y-4">
+                    <!-- Database Selector -->
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Target Database</label>
+                        <select v-model="selectedDb" class="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block p-2.5">
+                            <option value="" disabled>Select a database</option>
+                            <option v-for="db in databases" :key="db" :value="db">{{ db }}</option>
+                        </select>
+                    </div>
+
+                    <!-- Actions -->
+                    <div class="flex gap-2">
+                        <button @click="executeQuery" :disabled="loading || !selectedDb" class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                            <svg v-if="!loading" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" />
+                            </svg>
+                            <svg v-else class="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            {{ loading ? 'Running...' : 'Run Query' }}
+                        </button>
+                    </div>
+                </div>
+
+                <!-- SQL Editor -->
+                <div class="flex-1 flex flex-col p-4 bg-slate-50">
+                    <div class="flex justify-between items-center mb-2">
+                        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider">SQL Query</label>
+                        <span class="text-xs text-slate-400">T-SQL</span>
+                    </div>
+                    <textarea v-model="sql" class="flex-1 w-full p-4 font-mono text-sm bg-white border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 resize-none leading-relaxed" placeholder="SELECT TOP 10 * FROM TableName..." spellcheck="false"></textarea>
+                </div>
+
+                <!-- Params Editor -->
+                <div class="h-1/4 min-h-[150px] p-4 border-t border-slate-200 bg-white">
+                    <div class="flex justify-between items-center mb-2">
+                        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider">Parameters (JSON)</label>
+                    </div>
+                    <textarea v-model="paramsInput" class="w-full h-[calc(100%-24px)] p-3 font-mono text-xs bg-slate-50 border border-slate-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 resize-none" placeholder="{ &quot;id&quot;: 1 }" spellcheck="false"></textarea>
+                    <p v-if="paramsError" class="text-xs text-red-500 mt-1">{{ paramsError }}</p>
+                </div>
+            </div>
+
+            <!-- Right Content (Results) -->
+            <div class="flex-1 flex flex-col bg-white overflow-hidden relative">
+                <!-- Welcome State -->
+                <div v-if="!queryResult && !error" class="absolute inset-0 flex flex-col items-center justify-center text-slate-400 p-8 text-center">
+                    <div class="bg-slate-50 p-4 rounded-full mb-4">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+                        </svg>
+                    </div>
+                    <h3 class="text-lg font-medium text-slate-600 mb-2">No Results Yet</h3>
+                    <p class="max-w-sm text-sm">Select a database and execute a query to see the results here.</p>
+                </div>
+
+                <!-- Error State -->
+                <div v-if="error" class="bg-red-50 border-b border-red-100 p-4">
+                    <div class="flex gap-3">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-red-500 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
+                        </svg>
+                        <div>
+                            <h3 class="text-sm font-medium text-red-800">Query Execution Failed</h3>
+                            <p class="text-sm text-red-600 mt-1">{{ error }}</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Results -->
+                <div v-if="queryResult" class="flex-1 flex flex-col overflow-hidden">
+                    <!-- Result Meta -->
+                    <div class="bg-white border-b border-slate-200 px-4 py-2 flex items-center justify-between">
+                        <div class="flex items-center gap-4 text-sm">
+                            <span class="text-slate-500">Duration: <strong class="text-slate-700">{{ executionTime }}ms</strong></span>
+                            <span class="text-slate-500">Rows: <strong class="text-slate-700">{{ queryResult.recordset?.length || 0 }}</strong></span>
+                            <span class="text-slate-500">Affected: <strong class="text-slate-700">{{ queryResult.rowsAffected?.[0] || 0 }}</strong></span>
+                        </div>
+                        <button @click="downloadCSV" class="text-xs font-medium text-indigo-600 hover:text-indigo-800 flex items-center gap-1">
+                            Download CSV
+                        </button>
+                    </div>
+
+                    <!-- Table -->
+                    <div class="flex-1 overflow-auto custom-scrollbar">
+                        <table class="w-full text-left border-collapse">
+                            <thead class="bg-slate-50 sticky top-0 z-10 shadow-sm">
+                                <tr>
+                                    <th v-for="col in columns" :key="col" class="px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-200 whitespace-nowrap">
+                                        {{ col }}
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-100">
+                                <tr v-for="(row, i) in queryResult.recordset" :key="i" class="hover:bg-slate-50 transition-colors">
+                                    <td v-for="col in columns" :key="col" class="px-4 py-2.5 text-sm text-slate-700 whitespace-nowrap border-b border-slate-100 font-mono">
+                                        {{ formatValue(row[col]) }}
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <div v-if="queryResult.recordset?.length === 0" class="p-8 text-center text-slate-400 text-sm">
+                            Query executed successfully but returned no rows.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Settings Modal -->
+        <div v-if="showSettings" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md transform transition-all scale-100">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-xl font-bold text-slate-800">Connection Settings</h2>
+                    <button @click="showSettings = false" class="text-slate-400 hover:text-slate-600" :disabled="isSaving">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </button>
+                </div>
+
+                <div class="space-y-4">
+                    <!-- Error Alert -->
+                    <div v-if="saveError" class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm flex items-start gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 shrink-0 mt-0.5" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
+                        </svg>
+                        <span>{{ saveError }}</span>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Gateway URL</label>
+                        <input v-model="settings.url" type="text" class="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-indigo-500 focus:border-indigo-500" placeholder="http://localhost:3000/proxy" :disabled="isSaving">
+                        <p class="text-xs text-slate-500 mt-1">Use the proxy URL (default: /proxy) to avoid CORS.</p>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">API Token</label>
+                        <input v-model="settings.token" type="password" class="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-indigo-500 focus:border-indigo-500" placeholder="Enter your API token" :disabled="isSaving">
+                    </div>
+                </div>
+
+                <div class="mt-8 flex justify-end gap-3">
+                    <button @click="saveSettings" :disabled="isSaving" class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-6 rounded-lg transition-colors flex items-center gap-2 disabled:opacity-70 disabled:cursor-wait">
+                        <svg v-if="isSaving" class="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        {{ isSaving ? 'Verifying...' : 'Save & Connect' }}
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref, computed, onMounted, watch } = Vue;
+
+        createApp({
+            setup() {
+                // State
+                const showSettings = ref(false);
+                const loading = ref(false);
+                const connectionStatus = ref('disconnected');
+                const databases = ref([]);
+                const selectedDb = ref('');
+                const sql = ref('');
+                const paramsInput = ref('');
+                const paramsError = ref('');
+                const queryResult = ref(null);
+                const error = ref(null);
+                const executionTime = ref(0);
+                
+                // New state for saving settings
+                const isSaving = ref(false);
+                const saveError = ref('');
+
+                const settings = ref({
+                    // Default to the proxy path relative to where this HTML is served
+                    url: localStorage.getItem('dqg_url') || '/proxy', 
+                    token: localStorage.getItem('dqg_token') || ''
+                });
+
+                // Computed
+                const columns = computed(() => {
+                    if (!queryResult.value?.recordset?.[0]) return [];
+                    return Object.keys(queryResult.value.recordset[0]);
+                });
+
+                // Methods
+                const formatValue = (val) => {
+                    if (val === null) return 'NULL';
+                    if (typeof val === 'boolean') return val ? 'TRUE' : 'FALSE';
+                    if (typeof val === 'object') return JSON.stringify(val);
+                    return val;
+                };
+
+                const checkHealth = async () => {
+                    if (!settings.value.url) return false;
+                    
+                    try {
+                        const baseUrl = settings.value.url.endsWith('/') ? settings.value.url.slice(0, -1) : settings.value.url;
+                        
+                        // Try fetching databases as a connectivity test
+                        await fetchDatabases();
+                        
+                        connectionStatus.value = 'connected';
+                        return true;
+                    } catch (err) {
+                        connectionStatus.value = 'disconnected';
+                        console.error("Health check failed", err);
+                        throw err; // Re-throw for saveSettings to catch
+                    }
+                };
+
+                const fetchDatabases = async () => {
+                    if (!settings.value.token) {
+                        throw new Error("Token is required");
+                    }
+
+                    try {
+                        const baseUrl = settings.value.url.endsWith('/') ? settings.value.url.slice(0, -1) : settings.value.url;
+                        // Construct URL: if using /proxy, we append /v1/databases. 
+                        // The launcher handles mapping /proxy/v1/databases -> Target/v1/databases
+                        const endpoint = `${baseUrl}/v1/databases`;
+
+                        const res = await axios.get(endpoint, {
+                            headers: { 'x-api-key': settings.value.token }
+                        });
+
+                        if (res.data.success) {
+                            databases.value = res.data.data.available;
+                        } else {
+                            throw new Error(res.data.error || 'Failed to fetch databases');
+                        }
+                    } catch (err) {
+                        // Extract meaningful error message
+                        const msg = err.response?.data?.error || err.message;
+                        throw new Error(msg);
+                    }
+                };
+
+                const executeQuery = async () => {
+                    loading.value = true;
+                    error.value = null;
+                    queryResult.value = null;
+                    paramsError.value = '';
+
+                    let parsedParams = {};
+                    if (paramsInput.value.trim()) {
+                        try {
+                            parsedParams = JSON.parse(paramsInput.value);
+                        } catch (e) {
+                            paramsError.value = 'Invalid JSON format';
+                            loading.value = false;
+                            return;
+                        }
+                    }
+
+                    try {
+                        const baseUrl = settings.value.url.endsWith('/') ? settings.value.url.slice(0, -1) : settings.value.url;
+                        const endpoint = `${baseUrl}/v1/query`;
+
+                        const res = await axios.post(endpoint, {
+                            db_alias: selectedDb.value,
+                            sql: sql.value,
+                            params: parsedParams
+                        }, {
+                            headers: { 'x-api-key': settings.value.token }
+                        });
+
+                        if (res.data.success) {
+                            queryResult.value = res.data.data;
+                            executionTime.value = res.data.execution_ms;
+                        } else {
+                            error.value = res.data.error || 'Unknown error occurred';
+                        }
+                    } catch (err) {
+                        error.value = err.response?.data?.error || err.message;
+                    } finally {
+                        loading.value = false;
+                    }
+                };
+
+                const saveSettings = async () => {
+                    isSaving.value = true;
+                    saveError.value = '';
+                    
+                    try {
+                        // Save to temp storage first
+                        localStorage.setItem('dqg_url', settings.value.url);
+                        localStorage.setItem('dqg_token', settings.value.token);
+                        
+                        // Test connection
+                        await checkHealth();
+                        
+                        // Only close if successful
+                        showSettings.value = false;
+                    } catch (err) {
+                        saveError.value = `Connection failed: ${err.message}`;
+                    } finally {
+                        isSaving.value = false;
+                    }
+                };
+
+                const downloadCSV = () => {
+                    if (!queryResult.value?.recordset?.length) return;
+                    
+                    const rows = queryResult.value.recordset;
+                    const headers = Object.keys(rows[0]);
+                    const csvContent = [
+                        headers.join(','),
+                        ...rows.map(row => headers.map(header => {
+                            const val = row[header];
+                            return typeof val === 'string' ? `"${val.replace(/"/g, '""')}"` : val;
+                        }).join(','))
+                    ].join('\n');
+
+                    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                    const link = document.createElement('a');
+                    link.href = URL.createObjectURL(blob);
+                    link.download = `query_result_${Date.now()}.csv`;
+                    link.click();
+                };
+
+                // Init
+                onMounted(() => {
+                    if (!settings.value.token) {
+                        showSettings.value = true;
+                    } else {
+                        checkHealth().catch(() => {
+                            // If initial check fails, show settings but don't error immediately
+                            // showSettings.value = true; 
+                        });
+                    }
+                });
+
+                return {
+                    showSettings,
+                    loading,
+                    isSaving,
+                    saveError,
+                    connectionStatus,
+                    databases,
+                    selectedDb,
+                    sql,
+                    paramsInput,
+                    paramsError,
+                    queryResult,
+                    error,
+                    executionTime,
+                    settings,
+                    columns,
+                    executeQuery,
+                    saveSettings,
+                    downloadCSV,
+                    formatValue
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
