@@ -11,6 +11,17 @@ SQL Gateway memungkinkan Anda mengeksekusi query SQL ke **berbagai database** di
 
 ---
 
+## ⚠️ Security Rules
+
+| Database | Permissions |
+|----------|-------------|
+| `db_ptrj` | **READ-ONLY** (SELECT only) |
+| `extend_db_ptrj` | **FULL ACCESS** (SELECT, INSERT, UPDATE, DELETE) |
+
+**Blocked operations:** `DROP`, `TRUNCATE`, `ALTER`, `CREATE`, `GRANT`, `REVOKE`
+
+---
+
 ## Authentication
 
 ```http
