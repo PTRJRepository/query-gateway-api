@@ -1,73 +1,117 @@
 import sql from 'mssql';
-import { getDatabaseConfig, getAvailableAliases } from '../config/database.js';
+import { getDatabaseConfig, getAvailableAliases, getServerProfiles, DatabaseConfig } from '../config/database.js';
 
-// Use LOCAL profile by default
-const DEFAULT_PROFILE = 'LOCAL';
+// Default server profile (from env or fallback)
+const DEFAULT_SERVER = process.env.DB_PROFILE || 'SERVER_PROFILE_1';
+
+interface PoolStats {
+    connected: boolean;
+    size: number;
+    available: number;
+    pending: number;
+}
 
 /**
- * Optimized Connection Pool Manager for SQL Server
- * Uses single profile (LOCAL) to connect, supports switching databases
+ * Multi-Pool Connection Manager for SQL Server
+ * Supports multiple server profiles with separate connection pools
+ * Features: health checks, auto-reconnection, robust pooling
  */
 class ConnectionManager {
-    private pool: sql.ConnectionPool | null = null;
-    private connecting: Promise<sql.ConnectionPool> | null = null;
-    private profileName: string = DEFAULT_PROFILE;
+    private pools: Map<string, sql.ConnectionPool> = new Map();
+    private connecting: Map<string, Promise<sql.ConnectionPool>> = new Map();
+    private healthStatus: Map<string, boolean> = new Map();
 
     /**
-     * Get current profile name
+     * Get default server profile name
      */
-    getActiveProfile(): string {
-        return this.profileName;
+    getDefaultServer(): string {
+        return DEFAULT_SERVER;
     }
 
     /**
-     * Get or create the connection pool
+     * Get or create connection pool for a specific server profile
      */
-    async getPool(): Promise<sql.ConnectionPool> {
+    async getPool(serverProfile?: string): Promise<sql.ConnectionPool> {
+        const profileName = (serverProfile || DEFAULT_SERVER).toUpperCase();
+
         // Return existing pool if available and connected
-        if (this.pool?.connected) {
-            return this.pool;
+        const existingPool = this.pools.get(profileName);
+        if (existingPool?.connected) {
+            return existingPool;
         }
 
         // If currently connecting, wait for that promise
-        if (this.connecting) {
-            return this.connecting;
+        const connectingPromise = this.connecting.get(profileName);
+        if (connectingPromise) {
+            return connectingPromise;
         }
 
         // Create new connection
-        this.connecting = this.createPool();
+        const createPromise = this.createPool(profileName);
+        this.connecting.set(profileName, createPromise);
 
         try {
-            this.pool = await this.connecting;
-            return this.pool;
+            const pool = await createPromise;
+            this.pools.set(profileName, pool);
+            this.healthStatus.set(profileName, true);
+            return pool;
+        } catch (err) {
+            this.healthStatus.set(profileName, false);
+            throw err;
         } finally {
-            this.connecting = null;
+            this.connecting.delete(profileName);
         }
     }
 
     /**
-     * Pre-warm connection pool at startup
+     * Pre-warm connection pools with health check for all configured servers
      */
     async warmUp(): Promise<void> {
-        console.log(`🔥 Pre-warming connection to ${this.profileName}...`);
+        const aliases = getAvailableAliases();
+        console.log(`🔥 Pre-warming ${aliases.length} server pool(s)...`);
+
+        const warmupPromises = aliases.map(async (alias) => {
+            try {
+                // Health check: test connection
+                const pool = await this.getPool(alias);
+                await this.healthCheck(pool, alias);
+                console.log(`✅ ${alias}: Connected & healthy`);
+            } catch (err) {
+                console.warn(`⚠️ ${alias}: ${(err as Error).message}`);
+                this.healthStatus.set(alias, false);
+            }
+        });
+
+        await Promise.allSettled(warmupPromises);
+        console.log(`🚀 Connection warmup complete`);
+    }
+
+    /**
+     * Health check - execute simple query to verify connection
+     */
+    private async healthCheck(pool: sql.ConnectionPool, profileName: string): Promise<boolean> {
         try {
-            await this.getPool();
-            console.log(`✅ Connection ready`);
+            const request = pool.request();
+            await request.query('SELECT 1 AS health_check');
+            this.healthStatus.set(profileName, true);
+            return true;
         } catch (err) {
-            console.warn(`⚠️ Warmup failed: ${(err as Error).message}`);
+            console.error(`❌ Health check failed for ${profileName}:`, (err as Error).message);
+            this.healthStatus.set(profileName, false);
+            return false;
         }
     }
 
     /**
      * Create a new connection pool with optimized settings
      */
-    private async createPool(): Promise<sql.ConnectionPool> {
-        const config = getDatabaseConfig(this.profileName);
+    private async createPool(profileName: string): Promise<sql.ConnectionPool> {
+        const config = getDatabaseConfig(profileName);
 
         if (!config) {
             const available = getAvailableAliases();
             throw new Error(
-                `Profile '${this.profileName}' not found. Available: ${available.join(', ')}`
+                `Server profile '${profileName}' not found. Available: ${available.join(', ')}`
             );
         }
 
@@ -76,7 +120,7 @@ class ConnectionManager {
             password: config.password,
             server: config.server,
             port: config.port,
-            database: config.database,  // Default database
+            database: config.database,
             pool: {
                 max: config.pool.max,
                 min: config.pool.min,
@@ -95,26 +139,29 @@ class ConnectionManager {
 
         const pool = new sql.ConnectionPool(poolConfig);
 
+        // Handle pool errors - mark as unhealthy and remove from pool map
         pool.on('error', (err: Error) => {
-            console.error(`Pool error:`, err.message);
-            this.pool = null;
+            console.error(`Pool error [${profileName}]:`, err.message);
+            this.healthStatus.set(profileName, false);
+            this.pools.delete(profileName);
         });
 
         await pool.connect();
-        console.log(`✅ Connected: ${config.server}:${config.port} (default db: ${config.database})`);
+        console.log(`✅ Connected: ${profileName} -> ${config.server}:${config.port} (db: ${config.database}, readOnly: ${config.readOnly})`);
 
         return pool;
     }
 
     /**
-     * Execute a query, optionally on a specific database
+     * Execute a query on a specific server, optionally switching database
      */
     async query(
         sqlQuery: string,
         params?: Record<string, unknown>,
-        database?: string
+        database?: string,
+        serverProfile?: string
     ): Promise<sql.IResult<unknown>> {
-        const pool = await this.getPool();
+        const pool = await this.getPool(serverProfile);
         const request = pool.request();
 
         // Add parameters if provided
@@ -133,26 +180,82 @@ class ConnectionManager {
     }
 
     /**
-     * Close connection pool
+     * Get config for a server profile (useful for read-only check)
      */
-    async closeAll(): Promise<void> {
-        if (this.pool) {
-            console.log(`Closing connection pool...`);
-            await this.pool.close();
-            this.pool = null;
-            console.log('Connection pool closed.');
-        }
+    getServerConfig(serverProfile?: string): DatabaseConfig | undefined {
+        const profileName = (serverProfile || DEFAULT_SERVER).toUpperCase();
+        return getDatabaseConfig(profileName);
     }
 
     /**
-     * Get pool statistics
+     * Check if server profile is read-only
      */
-    getPoolStats(): { connected: boolean; size: number } | null {
-        if (!this.pool) return null;
-        return {
-            connected: this.pool.connected,
-            size: this.pool.size,
-        };
+    isServerReadOnly(serverProfile?: string): boolean {
+        const config = this.getServerConfig(serverProfile);
+        return config?.readOnly ?? false;
+    }
+
+    /**
+     * Close all connection pools
+     */
+    async closeAll(): Promise<void> {
+        console.log(`Closing ${this.pools.size} connection pool(s)...`);
+
+        const closePromises = Array.from(this.pools.entries()).map(async ([name, pool]) => {
+            try {
+                await pool.close();
+                console.log(`  ✅ ${name}: Closed`);
+            } catch (err) {
+                console.error(`  ❌ ${name}: ${(err as Error).message}`);
+            }
+        });
+
+        await Promise.allSettled(closePromises);
+        this.pools.clear();
+        this.healthStatus.clear();
+        console.log('All connection pools closed.');
+    }
+
+    /**
+     * Get pool statistics for all servers
+     */
+    getPoolStats(): Record<string, PoolStats & { healthy: boolean }> {
+        const stats: Record<string, PoolStats & { healthy: boolean }> = {};
+
+        for (const [name, pool] of this.pools) {
+            stats[name] = {
+                connected: pool.connected,
+                size: pool.size,
+                available: (pool as any).available ?? 0,
+                pending: (pool as any).pending ?? 0,
+                healthy: this.healthStatus.get(name) ?? false,
+            };
+        }
+
+        return stats;
+    }
+
+    /**
+     * Get server list with connection status
+     */
+    getServersStatus(): Array<{
+        name: string;
+        host: string;
+        port: number;
+        defaultDatabase: string;
+        readOnly: boolean;
+        connected: boolean;
+        healthy: boolean;
+    }> {
+        const profiles = getServerProfiles();
+        return profiles.map(profile => {
+            const pool = this.pools.get(profile.name.toUpperCase());
+            return {
+                ...profile,
+                connected: pool?.connected ?? false,
+                healthy: this.healthStatus.get(profile.name.toUpperCase()) ?? false,
+            };
+        });
     }
 }
 

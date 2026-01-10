@@ -28,6 +28,7 @@ const READONLY_DATABASES = ['db_ptrj'];
  * Rules:
  * - db_ptrj: READ-ONLY (SELECT only)
  * - extend_db_ptrj: Full access (SELECT, INSERT, UPDATE, DELETE)
+ * - Server-level readOnly: Rejects all write operations
  */
 export class QueryValidator {
     private parser: InstanceType<typeof Parser>;
@@ -37,9 +38,9 @@ export class QueryValidator {
     }
 
     /**
-     * Validate a SQL query against permissions and database rules
+     * Validate a SQL query against permissions, database rules, and server read-only status
      */
-    validate(sqlQuery: string, permissions: ApiKeyPermissions, database?: string): ValidationResult {
+    validate(sqlQuery: string, permissions: ApiKeyPermissions, database?: string, isServerReadOnly?: boolean): ValidationResult {
         const dbName = (database || 'db_ptrj').toLowerCase();
 
         try {
@@ -64,6 +65,15 @@ export class QueryValidator {
                 // Check if this is a write operation
                 const writeOperations = ['INSERT', 'UPDATE', 'DELETE'];
                 if (writeOperations.includes(queryType)) {
+                    // Check if SERVER is read-only (priority over database check)
+                    if (isServerReadOnly) {
+                        return {
+                            valid: false,
+                            error: `Access denied: Server is READ-ONLY. Write operations (${queryType}) not allowed.`,
+                            queryType,
+                        };
+                    }
+
                     // Check if database is read-only
                     if (READONLY_DATABASES.includes(dbName)) {
                         return {
@@ -115,10 +125,17 @@ export class QueryValidator {
                 }
             }
 
-            // Check write operations on read-only databases
+            // Check write operations on read-only server/databases
             const writeOps = ['INSERT', 'UPDATE', 'DELETE'];
             for (const op of writeOps) {
                 if (upperQuery.startsWith(op)) {
+                    // Check server read-only first
+                    if (isServerReadOnly) {
+                        return {
+                            valid: false,
+                            error: `Access denied: Server is READ-ONLY. Write operations (${op}) not allowed.`,
+                        };
+                    }
                     if (READONLY_DATABASES.includes(dbName)) {
                         return {
                             valid: false,

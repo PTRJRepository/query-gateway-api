@@ -7,12 +7,14 @@ import { getAvailableAliases } from '../config/database.js';
 interface QueryBody {
     sql: string;
     database?: string;  // Optional: specify database name (default from profile)
+    server?: string;    // Optional: specify server profile (e.g., 'SERVER_PROFILE_1')
     params?: Record<string, unknown>;
 }
 
 interface BatchQueryBody {
     queries: Array<{ sql: string; params?: Record<string, unknown> }>;
     database?: string;
+    server?: string;    // Optional: specify server profile
 }
 
 // Swagger schema definitions
@@ -21,6 +23,7 @@ const standardResponseSchema = {
     properties: {
         success: { type: 'boolean' },
         db: { type: 'string', nullable: true },
+        server: { type: 'string', nullable: true },
         execution_ms: { type: 'number' },
         data: {
             type: 'object',
@@ -33,34 +36,102 @@ const standardResponseSchema = {
 
 /**
  * Query routes - /v1/query endpoint
- * Uses LOCAL profile, supports multiple databases on the server
+ * Supports multiple server profiles and databases
  */
 export async function queryRoutes(fastify: FastifyInstance): Promise<void> {
 
     /**
+     * GET /v1/servers - List available server profiles
+     */
+    fastify.get('/servers', {
+        schema: {
+            tags: ['Server'],
+            summary: 'List available server profiles',
+            description: 'Returns all configured server profiles with connection status',
+            security: [{ apiKey: [] }],
+            response: {
+                200: {
+                    type: 'object',
+                    properties: {
+                        success: { type: 'boolean' },
+                        data: {
+                            type: 'object',
+                            properties: {
+                                servers: {
+                                    type: 'array',
+                                    items: {
+                                        type: 'object',
+                                        properties: {
+                                            name: { type: 'string' },
+                                            host: { type: 'string' },
+                                            port: { type: 'number' },
+                                            defaultDatabase: { type: 'string' },
+                                            readOnly: { type: 'boolean' },
+                                            connected: { type: 'boolean' },
+                                            healthy: { type: 'boolean' },
+                                        },
+                                    },
+                                },
+                                total: { type: 'number' },
+                                defaultServer: { type: 'string' },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    }, async () => {
+        const servers = connectionManager.getServersStatus();
+        return {
+            success: true,
+            data: {
+                servers,
+                total: servers.length,
+                defaultServer: connectionManager.getDefaultServer(),
+            },
+        };
+    });
+
+    /**
      * GET /v1/databases - List available databases on server
      */
-    fastify.get('/databases', {
+    fastify.get<{ Querystring: { server?: string } }>('/databases', {
         schema: {
             tags: ['Database'],
             summary: 'List databases on server',
-            description: 'Returns available databases on the connected SQL Server',
+            description: 'Returns available databases on the specified SQL Server. Defaults to primary server.',
             security: [{ apiKey: [] }],
+            querystring: {
+                type: 'object',
+                properties: {
+                    server: {
+                        type: 'string',
+                        description: 'Server profile name (optional). If not specified, uses default server.',
+                        examples: ['SERVER_PROFILE_1', 'SERVER_PROFILE_2'],
+                    },
+                },
+            },
             response: {
                 200: standardResponseSchema,
             },
         },
-    }, async (request: FastifyRequest, reply: FastifyReply) => {
+    }, async (request: FastifyRequest<{ Querystring: { server?: string } }>, reply: FastifyReply) => {
+        const serverProfile = request.query.server;
+
         try {
             // Query to get all databases on the server
             const result = await connectionManager.query(
-                "SELECT name FROM sys.databases WHERE state = 0 ORDER BY name"
+                "SELECT name FROM sys.databases WHERE state = 0 ORDER BY name",
+                undefined,
+                undefined,
+                serverProfile
             );
 
             const databases = (result.recordset as any[]).map((row: { name: string }) => row.name);
 
             return {
                 success: true,
+                server: serverProfile || connectionManager.getDefaultServer(),
                 data: {
                     databases: databases,
                     total: databases.length,
@@ -71,6 +142,7 @@ export async function queryRoutes(fastify: FastifyInstance): Promise<void> {
             const error = err as Error;
             return reply.code(500).send({
                 success: false,
+                server: serverProfile || connectionManager.getDefaultServer(),
                 data: null,
                 error: `Failed to list databases: ${error.message}`,
             });
@@ -84,7 +156,7 @@ export async function queryRoutes(fastify: FastifyInstance): Promise<void> {
         schema: {
             tags: ['Query'],
             summary: 'Execute SQL query',
-            description: 'Execute a SQL query. Optionally specify database name, otherwise uses default from profile.',
+            description: 'Execute a SQL query. Optionally specify server profile and database name.',
             security: [{ apiKey: [] }],
             body: {
                 type: 'object',
@@ -94,6 +166,11 @@ export async function queryRoutes(fastify: FastifyInstance): Promise<void> {
                         type: 'string',
                         description: 'SQL query to execute',
                         examples: ['SELECT TOP 10 * FROM HR_EMPLOYEE'],
+                    },
+                    server: {
+                        type: 'string',
+                        description: 'Server profile name (optional). If not specified, uses default server.',
+                        examples: ['SERVER_PROFILE_1', 'SERVER_PROFILE_2'],
                     },
                     database: {
                         type: 'string',
@@ -115,7 +192,7 @@ export async function queryRoutes(fastify: FastifyInstance): Promise<void> {
             },
         },
     }, async (request: FastifyRequest<{ Body: QueryBody }>, reply: FastifyReply) => {
-        const { sql, database, params } = request.body;
+        const { sql, database, server, params } = request.body;
         const startTime = performance.now();
 
         if (!sql) {
@@ -124,8 +201,11 @@ export async function queryRoutes(fastify: FastifyInstance): Promise<void> {
             );
         }
 
-        // Validate query against permissions
-        const validation = queryValidator.validate(sql, request.permissions, database || 'LOCAL');
+        // Check if server is read-only
+        const isServerReadOnly = connectionManager.isServerReadOnly(server);
+
+        // Validate query against permissions and server read-only status
+        const validation = queryValidator.validate(sql, request.permissions, database || 'db_ptrj', isServerReadOnly);
 
         if (!validation.valid) {
             return reply.code(403).send(
@@ -136,31 +216,35 @@ export async function queryRoutes(fastify: FastifyInstance): Promise<void> {
         try {
             // Execute query with timing
             const { result, durationMs } = await measureTime(() =>
-                connectionManager.query(sql, params, database)
+                connectionManager.query(sql, params, database, server)
             );
 
-            return successResponse(
-                {
+            return {
+                success: true,
+                server: server || connectionManager.getDefaultServer(),
+                db: database || 'default',
+                execution_ms: durationMs,
+                data: {
                     recordset: result.recordset,
                     rowsAffected: result.rowsAffected,
                 },
-                database || 'default',
-                durationMs
-            );
+                error: null,
+            };
 
         } catch (err) {
             const error = err as Error;
             const executionMs = performance.now() - startTime;
 
-            console.error(`Query error:`, error.message);
+            console.error(`Query error [${server || 'default'}]:`, error.message);
 
-            return reply.code(500).send(
-                errorResponse(
-                    `Database error: ${error.message}`,
-                    database,
-                    executionMs
-                )
-            );
+            return reply.code(500).send({
+                success: false,
+                server: server || connectionManager.getDefaultServer(),
+                db: database,
+                execution_ms: executionMs,
+                data: null,
+                error: `Database error: ${error.message}`,
+            });
         }
     });
 
@@ -179,6 +263,10 @@ export async function queryRoutes(fastify: FastifyInstance): Promise<void> {
                     type: 'object',
                     required: ['queries'],
                     properties: {
+                        server: {
+                            type: 'string',
+                            description: 'Server profile name (optional)',
+                        },
                         database: {
                             type: 'string',
                             description: 'Database name (optional)',
@@ -205,7 +293,7 @@ export async function queryRoutes(fastify: FastifyInstance): Promise<void> {
             },
         },
         async (request, reply) => {
-            const { queries, database } = request.body;
+            const { queries, database, server } = request.body;
             const startTime = performance.now();
 
             if (!queries || !Array.isArray(queries)) {
@@ -214,9 +302,12 @@ export async function queryRoutes(fastify: FastifyInstance): Promise<void> {
                 );
             }
 
+            // Check if server is read-only
+            const isServerReadOnly = connectionManager.isServerReadOnly(server);
+
             // Validate all queries first
             for (let i = 0; i < queries.length; i++) {
-                const validation = queryValidator.validate(queries[i].sql, request.permissions, database || 'LOCAL');
+                const validation = queryValidator.validate(queries[i].sql, request.permissions, database || 'db_ptrj', isServerReadOnly);
                 if (!validation.valid) {
                     return reply.code(403).send(
                         errorResponse(`Query ${i + 1} validation failed: ${validation.error}`, database)
@@ -225,7 +316,7 @@ export async function queryRoutes(fastify: FastifyInstance): Promise<void> {
             }
 
             try {
-                const pool = await connectionManager.getPool();
+                const pool = await connectionManager.getPool(server);
                 const transaction = pool.transaction();
 
                 await transaction.begin();
@@ -256,11 +347,14 @@ export async function queryRoutes(fastify: FastifyInstance): Promise<void> {
 
                     await transaction.commit();
 
-                    return successResponse(
-                        { results, transactionCommitted: true },
-                        database || 'default',
-                        performance.now() - startTime
-                    );
+                    return {
+                        success: true,
+                        server: server || connectionManager.getDefaultServer(),
+                        db: database || 'default',
+                        execution_ms: performance.now() - startTime,
+                        data: { results, transactionCommitted: true },
+                        error: null,
+                    };
 
                 } catch (queryErr) {
                     await transaction.rollback();
@@ -269,13 +363,14 @@ export async function queryRoutes(fastify: FastifyInstance): Promise<void> {
 
             } catch (err) {
                 const error = err as Error;
-                return reply.code(500).send(
-                    errorResponse(
-                        `Transaction failed: ${error.message}`,
-                        database,
-                        performance.now() - startTime
-                    )
-                );
+                return reply.code(500).send({
+                    success: false,
+                    server: server || connectionManager.getDefaultServer(),
+                    db: database,
+                    execution_ms: performance.now() - startTime,
+                    data: null,
+                    error: `Transaction failed: ${error.message}`,
+                });
             }
         }
     );

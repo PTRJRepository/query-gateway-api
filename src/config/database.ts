@@ -9,6 +9,7 @@ export interface DatabaseConfig {
     user: string;
     password: string;
     database: string;
+    readOnly: boolean;  // Server is read-only (rejects write operations)
     options: {
         encrypt: boolean;
         trustServerCertificate: boolean;
@@ -42,33 +43,42 @@ export function loadDatabaseProfiles(): DatabaseProfiles {
     // Find all unique database profile names
     const profileNames = new Set<string>();
 
+    // Define known property suffixes (what comes AFTER the profile name)
+    const knownSuffixes = [
+        '_DRIVER', '_SERVER', '_PORT', '_USERNAME', '_PASSWORD',
+        '_DATABASE_NAME', '_TRUSTED_CONNECTION', '_ENCRYPT', '_READ_ONLY'
+    ];
+
     for (const key of Object.keys(envVars)) {
         if (key.startsWith('DATABASE_PROFILES_')) {
-            const parts = key.replace('DATABASE_PROFILES_', '').split('_');
-            const propertyNames = ['DRIVER', 'SERVER', 'PORT', 'USERNAME', 'PASSWORD', 'DATABASE', 'NAME', 'TRUSTED', 'CONNECTION', 'ENCRYPT'];
-            let profileParts: string[] = [];
+            const afterPrefix = key.replace('DATABASE_PROFILES_', '');
 
-            for (let i = 0; i < parts.length; i++) {
-                if (propertyNames.includes(parts[i])) {
+            // Try to match each known suffix and extract profile name
+            for (const suffix of knownSuffixes) {
+                if (afterPrefix.endsWith(suffix)) {
+                    const profileName = afterPrefix.slice(0, -suffix.length);
+                    if (profileName) {
+                        profileNames.add(profileName);
+                    }
                     break;
                 }
-                profileParts.push(parts[i]);
-            }
-
-            if (profileParts.length > 0) {
-                profileNames.add(profileParts.join('_'));
             }
         }
     }
+
+    console.log(`Found profiles: ${[...profileNames].join(', ') || '(none)'}`);
 
     // Build config for each profile with OPTIMIZED pool settings
     for (const profileName of profileNames) {
         const prefix = `DATABASE_PROFILES_${profileName}_`;
 
         const server = envVars[`${prefix}SERVER`];
-        const database = envVars[`${prefix}DATABASE_NAME`];
+        // DATABASE_NAME is optional - default to 'master' if not specified
+        const database = envVars[`${prefix}DATABASE_NAME`] || 'master';
 
-        if (!server || !database) {
+        // Only require SERVER to exist
+        if (!server) {
+            console.log(`Skipping profile ${profileName}: Missing SERVER`);
             continue;
         }
 
@@ -79,16 +89,17 @@ export function loadDatabaseProfiles(): DatabaseProfiles {
             user: envVars[`${prefix}USERNAME`] || 'sa',
             password: envVars[`${prefix}PASSWORD`] || '',
             database: database,
+            readOnly: envVars[`${prefix}READ_ONLY`] === 'true',  // Parse READ_ONLY flag
             options: {
                 encrypt: envVars[`${prefix}ENCRYPT`] === 'true',
                 trustServerCertificate: envVars[`${prefix}TRUSTED_CONNECTION`] !== 'true',
             },
             pool: {
-                // OPTIMIZED: Larger pool for better concurrency
-                max: 20,           // Max 20 connections per database
-                min: 2,            // Keep 2 connections warm
+                // OPTIMIZED: Robust pool for multi-server usage
+                max: 30,           // Max 30 connections per server
+                min: 3,            // Keep 3 connections warm
                 idleTimeoutMillis: 60000,      // 60 seconds idle timeout
-                acquireTimeoutMillis: 15000,   // 15 seconds to acquire connection
+                acquireTimeoutMillis: 10000,   // 10 seconds to acquire (faster timeout)
             },
         };
     }
@@ -121,4 +132,24 @@ export function getAvailableAliases(): string[] {
  */
 export function clearProfileCache(): void {
     cachedProfiles = null;
+}
+
+/**
+ * Get all server profiles with metadata (for /servers endpoint)
+ */
+export function getServerProfiles(): Array<{
+    name: string;
+    host: string;
+    port: number;
+    defaultDatabase: string;
+    readOnly: boolean;
+}> {
+    const profiles = loadDatabaseProfiles();
+    return Object.entries(profiles).map(([name, config]) => ({
+        name,
+        host: config.server,
+        port: config.port,
+        defaultDatabase: config.database,
+        readOnly: config.readOnly,
+    }));
 }
