@@ -13,17 +13,13 @@ interface PoolStats {
 
 /**
  * Multi-Pool Connection Manager for SQL Server
- * Supports multiple server profiles with separate connection pools
- * Features: health checks, auto-reconnection, robust pooling
+ * Optimized for Bun runtime with separate pools per server
  */
 class ConnectionManager {
     private pools: Map<string, sql.ConnectionPool> = new Map();
     private connecting: Map<string, Promise<sql.ConnectionPool>> = new Map();
     private healthStatus: Map<string, boolean> = new Map();
 
-    /**
-     * Get default server profile name
-     */
     getDefaultServer(): string {
         return DEFAULT_SERVER;
     }
@@ -64,15 +60,15 @@ class ConnectionManager {
     }
 
     /**
-     * Pre-warm connection pools with health check for all configured servers
+     * Pre-warm connection pools - PARALLEL for all servers
      */
     async warmUp(): Promise<void> {
         const aliases = getAvailableAliases();
         console.log(`🔥 Pre-warming ${aliases.length} server pool(s)...`);
 
+        // Connect to all servers in PARALLEL
         const warmupPromises = aliases.map(async (alias) => {
             try {
-                // Health check: test connection
                 const pool = await this.getPool(alias);
                 await this.healthCheck(pool, alias);
                 console.log(`✅ ${alias}: Connected & healthy`);
@@ -87,7 +83,7 @@ class ConnectionManager {
     }
 
     /**
-     * Health check - execute simple query to verify connection
+     * Health check - simple SELECT 1
      */
     private async healthCheck(pool: sql.ConnectionPool, profileName: string): Promise<boolean> {
         try {
@@ -126,30 +122,20 @@ class ConnectionManager {
                 min: config.pool.min,
                 idleTimeoutMillis: config.pool.idleTimeoutMillis,
                 acquireTimeoutMillis: config.pool.acquireTimeoutMillis,
-                // OPTIMIZATION: Create connections more aggressively
-                createTimeoutMillis: 5000,
-                destroyTimeoutMillis: 5000,
-                reapIntervalMillis: 1000,
-                createRetryIntervalMillis: 200,
             },
             options: {
                 encrypt: config.options.encrypt,
                 trustServerCertificate: config.options.trustServerCertificate,
                 useUTC: true,
                 enableArithAbort: true,
-                // OPTIMIZATION: Performance settings
-                appName: 'SQL-Gateway',
-                packetSize: 16384,  // Larger packets = fewer round trips
-                abortTransactionOnError: true,
+                appName: `SQL-Gateway-${profileName}`,
             },
-            // OPTIMIZATION: Faster timeouts
-            requestTimeout: 30000,     // 30 seconds max for query
-            connectionTimeout: 15000,  // 15 seconds to connect
+            requestTimeout: 30000,
+            connectionTimeout: 15000,
         };
 
         const pool = new sql.ConnectionPool(poolConfig);
 
-        // Handle pool errors - mark as unhealthy and remove from pool map
         pool.on('error', (err: Error) => {
             console.error(`Pool error [${profileName}]:`, err.message);
             this.healthStatus.set(profileName, false);
@@ -163,7 +149,7 @@ class ConnectionManager {
     }
 
     /**
-     * Execute a query on a specific server, optionally switching database
+     * Execute a query on a specific server
      */
     async query(
         sqlQuery: string,
@@ -174,14 +160,12 @@ class ConnectionManager {
         const pool = await this.getPool(serverProfile);
         const request = pool.request();
 
-        // Add parameters if provided
         if (params && Object.keys(params).length > 0) {
             for (const [key, value] of Object.entries(params)) {
                 request.input(key, value);
             }
         }
 
-        // If database specified, prepend USE statement
         const finalQuery = database
             ? `USE [${database}]; ${sqlQuery}`
             : sqlQuery;
@@ -190,7 +174,7 @@ class ConnectionManager {
     }
 
     /**
-     * Get config for a server profile (useful for read-only check)
+     * Get config for a server profile
      */
     getServerConfig(serverProfile?: string): DatabaseConfig | undefined {
         const profileName = (serverProfile || DEFAULT_SERVER).toUpperCase();
@@ -198,7 +182,7 @@ class ConnectionManager {
     }
 
     /**
-     * Check if server profile is read-only
+     * Check if server is read-only
      */
     isServerReadOnly(serverProfile?: string): boolean {
         const config = this.getServerConfig(serverProfile);
@@ -227,26 +211,7 @@ class ConnectionManager {
     }
 
     /**
-     * Get pool statistics for all servers
-     */
-    getPoolStats(): Record<string, PoolStats & { healthy: boolean }> {
-        const stats: Record<string, PoolStats & { healthy: boolean }> = {};
-
-        for (const [name, pool] of this.pools) {
-            stats[name] = {
-                connected: pool.connected,
-                size: pool.size,
-                available: (pool as any).available ?? 0,
-                pending: (pool as any).pending ?? 0,
-                healthy: this.healthStatus.get(name) ?? false,
-            };
-        }
-
-        return stats;
-    }
-
-    /**
-     * Get server list with connection status
+     * Get servers status
      */
     getServersStatus(): Array<{
         name: string;

@@ -316,50 +316,31 @@ export async function queryRoutes(fastify: FastifyInstance): Promise<void> {
             }
 
             try {
-                const pool = await connectionManager.getPool(server);
-                const transaction = pool.transaction();
-
-                await transaction.begin();
-
+                // In worker mode, we execute queries sequentially (no transaction support)
+                // Each query is sent to the worker independently
                 const results: unknown[] = [];
 
-                try {
-                    for (const query of queries) {
-                        const request = transaction.request();
-
-                        if (query.params) {
-                            for (const [key, value] of Object.entries(query.params)) {
-                                request.input(key, value);
-                            }
-                        }
-
-                        // Use database if specified
-                        const sqlWithDb = database
-                            ? `USE [${database}]; ${query.sql}`
-                            : query.sql;
-
-                        const result = await request.query(sqlWithDb);
-                        results.push({
-                            recordset: result.recordset,
-                            rowsAffected: result.rowsAffected,
-                        });
-                    }
-
-                    await transaction.commit();
-
-                    return {
-                        success: true,
-                        server: server || connectionManager.getDefaultServer(),
-                        db: database || 'default',
-                        execution_ms: performance.now() - startTime,
-                        data: { results, transactionCommitted: true },
-                        error: null,
-                    };
-
-                } catch (queryErr) {
-                    await transaction.rollback();
-                    throw queryErr;
+                for (const query of queries) {
+                    const result = await connectionManager.query(
+                        query.sql,
+                        query.params,
+                        database,
+                        server
+                    );
+                    results.push({
+                        recordset: result.recordset,
+                        rowsAffected: result.rowsAffected,
+                    });
                 }
+
+                return {
+                    success: true,
+                    server: server || connectionManager.getDefaultServer(),
+                    db: database || 'default',
+                    execution_ms: performance.now() - startTime,
+                    data: { results, transactionCommitted: false, note: 'Worker mode: no transaction wrapping' },
+                    error: null,
+                };
 
             } catch (err) {
                 const error = err as Error;
@@ -369,7 +350,7 @@ export async function queryRoutes(fastify: FastifyInstance): Promise<void> {
                     db: database,
                     execution_ms: performance.now() - startTime,
                     data: null,
-                    error: `Transaction failed: ${error.message}`,
+                    error: `Batch query failed: ${error.message}`,
                 });
             }
         }
