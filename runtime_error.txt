@@ -1,0 +1,53 @@
+﻿node : 
+At line:1 char:1
++ node --loader tsx 
+src/index.ts 2>&1 | 
+Out-File -FilePath 
+"runtime_err ...
++ ~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~
+    + CategoryInfo   
+           : NotSpe  
+  cified: (:String   
+ ) [], RemoteExce    
+ption
+    + FullyQualified 
+   ErrorId : Native  
+  CommandError
+ 
+node:internal/modules
+/run_main:122
+    triggerUncaughtEx
+ception(
+    ^
+Error: tsx must be 
+loaded with --import 
+instead of --loader
+The --loader flag 
+was deprecated in 
+Node v20.6.0 and 
+v18.19.0
+    at initialize (fi
+le:///D:/Tools_Gawe/D
+atabase_Query_Gateway
+/node_modules/tsx/dis
+t/esm/index.mjs:1:985
+)
+    at Hooks.addCusto
+mLoader (node:interna
+l/modules/esm/hooks:1
+83:24)
+    at 
+Hooks.register (node:
+internal/modules/esm/
+hooks:157:16)
+    at async 
+initializeHooks (node
+:internal/modules/esm
+/utils:318:5)
+    at async customiz
+edModuleWorker (node:
+internal/modules/esm/
+worker:109:13)
+
+Node.js v22.14.0

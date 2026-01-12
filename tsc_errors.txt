@@ -1,0 +1,3 @@
+﻿src/services/connectionManager.ts(1,17): error TS7016: Could not find a declaration file for module 'mssql'. 'D:/Tools_Gawe/Database_Query_Gateway/node_modules/mssql/index.js' implicitly has an 'any' type.
+  Try `npm i --save-dev @types/mssql` if it exists or add a new declaration (.d.ts) file containing `declare module 'mssql';`
+src/services/connectionManager.ts(67,27): error TS7006: Parameter 'err' implicitly has an 'any' type.

@@ -1,0 +1,51 @@
+﻿node : D:\Tools_Gawe\
+Database_Query_Gatewa
+y\src\services\queryV
+alidator.ts:1
+At line:1 char:1
++ node --import tsx 
+src/index.ts 2>&1 | 
+Out-File -FilePath 
+"run_error.t ...
++ ~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~
+    + CategoryInfo   
+           : NotSpe  
+  cified: (D:\Tool   
+ s_Gawe\D...yVali    
+dator.ts:1:Strin    
+g) [], RemoteExc    
+eption
+    + FullyQualified 
+   ErrorId : Native  
+  CommandError
+ 
+import { Parser } 
+from 
+'node-sql-parser';
+         ^
+
+SyntaxError: The 
+requested module 
+'node-sql-parser' 
+does not provide an 
+export named 'Parser'
+    at ModuleJob._ins
+tantiate (node:intern
+al/modules/esm/module
+_job:180:21)
+    at async 
+ModuleJob.run (node:i
+nternal/modules/esm/m
+odule_job:263:5)
+    at async onImport
+.tracePromise.__proto
+__ (node:internal/mod
+ules/esm/loader:578:2
+6)
+    at async asyncRun
+EntryPointWithESMLoad
+er (node:internal/mod
+ules/run_main:116:5)
+
+Node.js v22.14.0
