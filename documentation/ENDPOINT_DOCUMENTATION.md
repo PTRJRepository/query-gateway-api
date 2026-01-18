@@ -14,14 +14,77 @@ SQL Gateway API adalah REST API untuk mengeksekusi query SQL ke **multiple SQL S
 
 ## Server Configuration
 
-API mendukung multiple server profiles yang dikonfigurasi via environment variables:
+### Konsep Server Profile
 
-| Profile | Host | Port | Mode | Description |
-|---------|------|------|------|-------------|
-| `SERVER_PROFILE_1` | 10.0.0.110 | 1433 | **Read/Write** | Primary server, full access |
-| `SERVER_PROFILE_2` | 10.0.0.2 | 1888 | **Read-Only** | Secondary server, SELECT only |
+API mendukung **multiple server profiles** yang masing-masing merepresentasikan koneksi ke SQL Server yang berbeda. Setiap profile bisa memiliki:
+- **Host/IP** yang berbeda
+- **Port** yang berbeda  
+- **Credentials** yang berbeda
+- **Mode akses** (Read-Only atau Read/Write)
 
-**Default Server:** `SERVER_PROFILE_1` (jika parameter `server` tidak diberikan)
+### Cara Kerja
+
+1. **Semua profile yang terdefinisi di `.env`** akan otomatis di-load saat server startup
+2. **Request HARUS menyertakan parameter `server`** untuk memilih profile target
+3. Jika parameter `server` tidak diberikan, akan menggunakan nilai `DB_PROFILE` dari `.env`
+
+### Konfigurasi di `.env`
+
+Setiap server profile dikonfigurasi dengan prefix `DATABASE_PROFILES_{NAMA_PROFILE}_`:
+
+```env
+# Contoh: Mendefinisikan SERVER_PROFILE_3
+DATABASE_PROFILES_SERVER_PROFILE_3_SERVER=103.127.66.32
+DATABASE_PROFILES_SERVER_PROFILE_3_PORT=1888
+DATABASE_PROFILES_SERVER_PROFILE_3_USERNAME=sa
+DATABASE_PROFILES_SERVER_PROFILE_3_PASSWORD=your_password
+DATABASE_PROFILES_SERVER_PROFILE_3_DATABASE_NAME=master
+DATABASE_PROFILES_SERVER_PROFILE_3_READ_ONLY=true
+DATABASE_PROFILES_SERVER_PROFILE_3_DRIVER=ODBC Driver 17 for SQL Server
+DATABASE_PROFILES_SERVER_PROFILE_3_ENCRYPT=false
+DATABASE_PROFILES_SERVER_PROFILE_3_TRUSTED_CONNECTION=false
+
+# Default profile (digunakan jika request tidak menyertakan parameter 'server')
+DB_PROFILE=SERVER_PROFILE_3
+```
+
+### Menambah Server Profile Baru
+
+Untuk menambah profile baru, cukup tambahkan variabel environment dengan prefix yang sesuai:
+
+```env
+# Menambah SERVER_PROFILE_4 untuk production
+DATABASE_PROFILES_SERVER_PROFILE_4_SERVER=192.168.1.100
+DATABASE_PROFILES_SERVER_PROFILE_4_PORT=1433
+DATABASE_PROFILES_SERVER_PROFILE_4_USERNAME=app_user
+DATABASE_PROFILES_SERVER_PROFILE_4_PASSWORD=secure_password
+DATABASE_PROFILES_SERVER_PROFILE_4_DATABASE_NAME=production_db
+DATABASE_PROFILES_SERVER_PROFILE_4_READ_ONLY=false
+```
+
+> **Note:** Restart server setelah mengubah `.env` agar perubahan berlaku.
+
+### Menggunakan Server Profile di Request
+
+**Setiap request ke endpoint `/v1/query` HARUS menyertakan parameter `server`:**
+
+```json
+{
+  "sql": "SELECT TOP 10 * FROM HR_EMPLOYEE",
+  "server": "SERVER_PROFILE_3",
+  "database": "VenusHR14"
+}
+```
+
+Jika tidak menyertakan `server`, akan fallback ke nilai `DB_PROFILE` di `.env`.
+
+### Melihat Server Profile yang Tersedia
+
+Gunakan endpoint `/v1/servers` untuk melihat semua profile yang terdefinisi:
+
+```bash
+curl -X GET "http://localhost:8001/v1/servers" -H "x-api-key: YOUR_API_KEY"
+```
 
 ---
 
@@ -167,7 +230,7 @@ GET /v1/databases?server={SERVER_PROFILE}
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `server` | string | ❌ | `SERVER_PROFILE_1` | Nama server profile |
+| `server` | string | ✅ **Recommended** | (fallback ke `DB_PROFILE`) | Nama server profile target |
 
 #### Response Schema
 
@@ -228,7 +291,7 @@ Content-Type: application/json
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `sql` | string | ✅ | - | SQL query yang akan dieksekusi |
-| `server` | string | ❌ | `SERVER_PROFILE_1` | Target server profile |
+| `server` | string | ✅ **Recommended** | (fallback ke `DB_PROFILE`) | Target server profile |
 | `database` | string | ❌ | Pool default | Target database name |
 | `params` | object | ❌ | `{}` | Parameter untuk prepared statement |
 
@@ -245,8 +308,8 @@ Content-Type: application/json
 ```json
 {
   "sql": "SELECT TOP 10 EmpCode, EmpName FROM HR_EMPLOYEE",
-  "server": "SERVER_PROFILE_2",
-  "database": "db_ptrj"
+  "server": "SERVER_PROFILE_3",
+  "database": "VenusHR14"
 }
 ```
 
@@ -380,7 +443,7 @@ Content-Type: application/json
 | `queries` | array | ✅ | - | Array of query objects |
 | `queries[].sql` | string | ✅ | - | SQL query |
 | `queries[].params` | object | ❌ | `{}` | Parameters for query |
-| `server` | string | ❌ | `SERVER_PROFILE_1` | Target server |
+| `server` | string | ✅ **Recommended** | (fallback ke `DB_PROFILE`) | Target server |
 | `database` | string | ❌ | Pool default | Target database |
 
 #### Request Example
@@ -615,23 +678,32 @@ Swagger UI menyediakan:
 
 ## Environment Variables
 
-Konfigurasi server profiles di file `.env`:
+Lihat bagian [Server Configuration](#server-configuration) untuk panduan lengkap konfigurasi `.env`.
+
+### Variabel Utama
+
+| Variable | Description |
+|----------|-------------|
+| `API_TOKEN` | Token untuk autentikasi API |
+| `DB_PROFILE` | Default server profile (digunakan jika request tidak menyertakan `server`) |
+| `DATABASE_PROFILES_{NAME}_*` | Konfigurasi untuk setiap server profile |
+
+### Contoh Konfigurasi Lengkap
 
 ```env
-# Default server profile
-DB_PROFILE=SERVER_PROFILE_1
+# API Token
+API_TOKEN=2a993486e7a448474de66bfaea4adba7a99784defbcaba420e7f906176b94df6
 
-# Server Profile 1 (Read/Write)
-DATABASE_PROFILES_SERVER_PROFILE_1_SERVER=10.0.0.110
-DATABASE_PROFILES_SERVER_PROFILE_1_PORT=1433
-DATABASE_PROFILES_SERVER_PROFILE_1_USERNAME=sa
-DATABASE_PROFILES_SERVER_PROFILE_1_PASSWORD=your_password
-DATABASE_PROFILES_SERVER_PROFILE_1_READ_ONLY=false
+# Default profile
+DB_PROFILE=SERVER_PROFILE_3
 
-# Server Profile 2 (Read-Only)
-DATABASE_PROFILES_SERVER_PROFILE_2_SERVER=10.0.0.2
-DATABASE_PROFILES_SERVER_PROFILE_2_PORT=1888
-DATABASE_PROFILES_SERVER_PROFILE_2_USERNAME=sa
-DATABASE_PROFILES_SERVER_PROFILE_2_PASSWORD=your_password
-DATABASE_PROFILES_SERVER_PROFILE_2_READ_ONLY=true
+# Server Profile 3 (Read-Only, Remote)
+DATABASE_PROFILES_SERVER_PROFILE_3_SERVER=103.127.66.32
+DATABASE_PROFILES_SERVER_PROFILE_3_PORT=1888
+DATABASE_PROFILES_SERVER_PROFILE_3_USERNAME=sa
+DATABASE_PROFILES_SERVER_PROFILE_3_PASSWORD=your_password
+DATABASE_PROFILES_SERVER_PROFILE_3_DATABASE_NAME=master
+DATABASE_PROFILES_SERVER_PROFILE_3_READ_ONLY=true
+DATABASE_PROFILES_SERVER_PROFILE_3_ENCRYPT=false
+DATABASE_PROFILES_SERVER_PROFILE_3_TRUSTED_CONNECTION=false
 ```

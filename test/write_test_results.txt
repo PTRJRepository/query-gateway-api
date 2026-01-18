@@ -1,0 +1,25 @@
+==================================================
+WRITE PERMISSION TEST BY SERVER PROFILE
+==================================================
+
+--- SERVER_PROFILE_1 ---
+Database: db_ptrj
+Expected: ALLOW
+Result: ALLOWED (permission OK, table doesn't exist)
+
+--- SERVER_PROFILE_2 ---
+Database: db_ptrj
+Expected: BLOCK
+Result: BLOCKED (server is read-only)
+
+--- SERVER_PROFILE_3 ---
+Database: VenusHR14
+Expected: BLOCK
+Result: BLOCKED (server is read-only)
+
+==================================================
+SUMMARY
+==================================================
+SERVER_PROFILE_1: Expected=ALLOW, Got=allowed, Status=OK
+SERVER_PROFILE_2: Expected=BLOCK, Got=blocked_readonly, Status=OK
+SERVER_PROFILE_3: Expected=BLOCK, Got=blocked_readonly, Status=OK

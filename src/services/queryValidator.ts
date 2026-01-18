@@ -11,24 +11,17 @@ export interface ValidationResult {
     tables?: string[];
 }
 
-// Blacklisted SQL operations
-const BLACKLISTED_OPERATIONS = ['DROP', 'TRUNCATE', 'ALTER', 'CREATE', 'GRANT', 'REVOKE'];
-const BLACKLISTED_TABLES = ['sys', 'master', 'msdb', 'tempdb'];
-
-// Databases that allow write operations
-const WRITABLE_DATABASES = ['extend_db_ptrj'];
-
-// Databases that are READ-ONLY
-const READONLY_DATABASES = ['db_ptrj'];
+// Blacklisted SQL operations (always blocked regardless of server profile)
+const BLACKLISTED_OPERATIONS = ['DROP', 'TRUNCATE', 'GRANT', 'REVOKE'];
 
 /**
  * Query Validator using node-sql-parser
  * Validates SQL queries against security rules
  * 
  * Rules:
- * - db_ptrj: READ-ONLY (SELECT only)
- * - extend_db_ptrj: Full access (SELECT, INSERT, UPDATE, DELETE)
- * - Server-level readOnly: Rejects all write operations
+ * - Server-level readOnly=true: Only SELECT allowed (SERVER_PROFILE_2, SERVER_PROFILE_3)
+ * - Server-level readOnly=false: Full access - SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER (SERVER_PROFILE_1)
+ * - Blacklisted operations (DROP, TRUNCATE, GRANT, REVOKE) are always blocked
  */
 export class QueryValidator {
     private parser: InstanceType<typeof Parser>;
@@ -38,11 +31,10 @@ export class QueryValidator {
     }
 
     /**
-     * Validate a SQL query against permissions, database rules, and server read-only status
+     * Validate a SQL query against server read-only status
+     * Permission is based ONLY on server profile's READ_ONLY flag
      */
     validate(sqlQuery: string, permissions: ApiKeyPermissions, database?: string, isServerReadOnly?: boolean): ValidationResult {
-        const dbName = (database || 'db_ptrj').toLowerCase();
-
         try {
             // Parse the SQL query
             const { tableList, ast } = this.parser.parse(sqlQuery, { database: 'TransactSQL' });
@@ -63,49 +55,17 @@ export class QueryValidator {
                 }
 
                 // Check if this is a write operation
-                const writeOperations = ['INSERT', 'UPDATE', 'DELETE'];
+                const writeOperations = ['INSERT', 'UPDATE', 'DELETE', 'CREATE', 'ALTER'];
                 if (writeOperations.includes(queryType)) {
-                    // Check if SERVER is read-only (priority over database check)
+                    // Check if SERVER is read-only
                     if (isServerReadOnly) {
                         return {
                             valid: false,
-                            error: `Access denied: Server is READ-ONLY. Write operations (${queryType}) not allowed.`,
+                            error: `Access denied: Server profile is READ-ONLY. Write operations (${queryType}) not allowed. Use a server profile with READ_ONLY=false.`,
                             queryType,
                         };
                     }
-
-                    // Check if database is read-only
-                    if (READONLY_DATABASES.includes(dbName)) {
-                        return {
-                            valid: false,
-                            error: `Access denied: Database '${database || 'db_ptrj'}' is READ-ONLY. Only SELECT queries allowed. Use 'extend_db_ptrj' for write operations.`,
-                            queryType,
-                        };
-                    }
-
-                    // Check if database allows writes
-                    if (!WRITABLE_DATABASES.includes(dbName)) {
-                        return {
-                            valid: false,
-                            error: `Access denied: Write operations not allowed on database '${database}'. Allowed: ${WRITABLE_DATABASES.join(', ')}`,
-                            queryType,
-                        };
-                    }
-                }
-            }
-
-            // Extract and validate tables
-            const tables = this.extractTables(tableList);
-
-            // Check for blacklisted tables
-            for (const table of tables) {
-                const tableLower = table.toLowerCase();
-                if (BLACKLISTED_TABLES.some(bt => tableLower.includes(bt))) {
-                    return {
-                        valid: false,
-                        error: `Blocked: Access to system table '${table}' is not allowed.`,
-                        tables,
-                    };
+                    // If server is not read-only, allow write operations
                 }
             }
 
@@ -125,29 +85,18 @@ export class QueryValidator {
                 }
             }
 
-            // Check write operations on read-only server/databases
-            const writeOps = ['INSERT', 'UPDATE', 'DELETE'];
-            for (const op of writeOps) {
+            // Check write operations on read-only server
+            const writeOperations = ['INSERT', 'UPDATE', 'DELETE', 'CREATE', 'ALTER'];
+            for (const op of writeOperations) {
                 if (upperQuery.startsWith(op)) {
-                    // Check server read-only first
+                    // Check server read-only
                     if (isServerReadOnly) {
                         return {
                             valid: false,
-                            error: `Access denied: Server is READ-ONLY. Write operations (${op}) not allowed.`,
+                            error: `Access denied: Server profile is READ-ONLY. Write operations (${op}) not allowed. Use a server profile with READ_ONLY=false.`,
                         };
                     }
-                    if (READONLY_DATABASES.includes(dbName)) {
-                        return {
-                            valid: false,
-                            error: `Access denied: Database '${database || 'db_ptrj'}' is READ-ONLY. Only SELECT queries allowed.`,
-                        };
-                    }
-                    if (!WRITABLE_DATABASES.includes(dbName)) {
-                        return {
-                            valid: false,
-                            error: `Access denied: Write operations not allowed on database '${database}'.`,
-                        };
-                    }
+                    // If server is not read-only, allow write operations
                 }
             }
 

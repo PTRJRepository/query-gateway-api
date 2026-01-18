@@ -1,0 +1,62 @@
+=== Server Profile Connection Test ===
+Time: 2026-01-18 14:58:09
+API: http://localhost:8001
+
+[OK] API is healthy
+
+[INFO] Found 3 server profile(s):
+[INFO] Default: SERVER_PROFILE_3
+
+--- SERVER_PROFILE_1 ---
+    Host: 10.0.0.110:1433
+    Mode: READ/WRITE
+    Connected: True
+    Healthy: True
+    Databases (7):
+      - db_ptrj
+      - db_ptrj_mill
+      - extend_db_ptrj
+      - master
+      - model
+      - msdb
+      - tempdb
+    Query Test: OK (8.4ms)
+
+--- SERVER_PROFILE_2 ---
+    Host: 10.0.0.2:1888
+    Mode: READ-ONLY
+    Connected: True
+    Healthy: True
+    Databases (7):
+      - db_ptrj
+      - master
+      - model
+      - msdb
+      - staging_PTRJ_iFES_Plantware
+      - tempdb
+      - VenusHR14
+    Query Test: OK (9.0ms)
+
+--- SERVER_PROFILE_3 ---
+    Host: 103.127.66.32:1888
+    Mode: READ-ONLY
+    Connected: True
+    Healthy: True
+    Databases (7):
+      - db_ptrj_mill
+      - db_ptrj_mill_test
+      - master
+      - model
+      - msdb
+      - tempdb
+      - VenusHR14
+    Query Test: OK (109.8ms)
+
+=== SUMMARY ===
+Total Profiles: 3
+Connected: 3/3
+Query OK: 3/3
+
+  [OK] SERVER_PROFILE_1: 7 database(s)
+  [OK] SERVER_PROFILE_2: 7 database(s)
+  [OK] SERVER_PROFILE_3: 7 database(s)
